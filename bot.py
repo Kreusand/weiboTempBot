@@ -538,13 +538,29 @@ async def destRemoveCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @adminOnly
 async def destSetCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the kind of a destination, creating the destination first if it does not exist yet."""
+    message = update.effective_message
     if len(context.args) != 2 or context.args[1].lower() not in ("public", "test"):
-        await update.effective_message.reply_text("Usage: /destset <ChatID or @channel> <public|test>")
+        await message.reply_text("Usage: /destset <ChatID or @channel> <public|test>")
         return
     chatId = context.args[0].strip()
     kind = context.args[1].lower()
-    ok = store(context).setDestinationKind(chatId, kind)
-    await update.effective_message.reply_text(f"{chatId} is now a {kind} destination." if ok else "Destination not found.")
+    storage = store(context)
+    if storage.setDestinationKind(chatId, kind):
+        await message.reply_text(f"{chatId} is now a {kind} destination.")
+        return
+    if not (chatId.startswith("@") or re.fullmatch(r"-?\d{4,30}", chatId)):
+        await message.reply_text("The target must be a numeric Chat ID (usually -100...) or a public @channel name.")
+        return
+    # Unknown destination: make sure the bot can actually reach the chat before registering it.
+    try:
+        chat = await context.application.bot.get_chat(chatId)
+    except TelegramError as exc:
+        await message.reply_text(f"Could not access {chatId}: {exc}\nAdd the bot to that chat first, then retry."[:3900])
+        return
+    name = chat.title or (f"@{chat.username}" if chat.username else chatId)
+    storage.addDestination(chatId, name, kind)
+    await message.reply_text(f"Added {name} ({chatId}) as a {kind} destination.")
 
 
 @adminOnly
