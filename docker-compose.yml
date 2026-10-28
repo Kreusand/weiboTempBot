@@ -1,0 +1,11 @@
+services:
+  bot:
+    build: .
+    container_name: weibo-tg-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/state.db
+    volumes:
+      - ./data:/app/data
+    init: true
