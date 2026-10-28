@@ -335,10 +335,20 @@ async def addCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except ValueError as exc:
         await update.effective_message.reply_text(str(exc))
         return
-    await update.effective_message.reply_text(
-        f"已添加微博账号：{source.name}（UID {uid}）。\n"
-        "下一步执行 /check " + uid + "，首次检查只记录现有微博及评论作为基线。"
+    message = update.effective_message
+    await message.reply_text(
+        f"Added Weibo account {source.name} (UID {uid}). Building the baseline now: "
+        "existing posts and comments are recorded but not pushed."
     )
+    # Build the baseline right away. Waiting for the next poll cycle would let a post made in
+    # the meantime be swallowed into the baseline instead of being pushed.
+    try:
+        result = await pollSource(context.application, source, forceComments=True)
+        await message.reply_text(f"Baseline ready. {result}"[:3900])
+    except Exception as exc:
+        await message.reply_text(
+            f"Baseline failed: {exc}\nRegular polling will retry it, or run /check {uid}."[:3900]
+        )
 
 
 @adminOnly

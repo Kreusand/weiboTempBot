@@ -109,12 +109,12 @@ python bot.py
 
 ## 6. 配置参数
 
-- `POLL_INTERVAL_SECONDS`：微博时间线检查间隔，默认 120 秒，最低 60 秒。
-- `COMMENTS_POLL_INTERVAL_SECONDS`：评论/回复检查间隔，默认 300 秒，最低 120 秒。
-- `TIMELINE_PAGES`：每次读取时间线的页数，默认 3。
-- `COMMENTS_WATCH_POSTS`：检查评论的近期微博数，默认 20。
-- `COMMENTS_TOPLEVEL_LIMIT`：每条微博每次扫描最多检查多少条顶层评论，默认 20。
-- `REPLY_THREADS_PER_POLL`：每轮最多请求多少个评论回复线程，默认 12。
+- `POLL_INTERVAL_SECONDS`：微博时间线检查间隔，默认 60 秒，最低 60 秒。
+- `COMMENTS_POLL_INTERVAL_SECONDS`：评论/回复检查间隔，默认 60 秒，最低 60 秒。
+- `TIMELINE_PAGES`：每次读取时间线的页数，默认 2。
+- `COMMENTS_WATCH_POSTS`：检查评论的近期微博数，默认 7。
+- `COMMENTS_TOPLEVEL_LIMIT`：每条微博每次扫描最多检查多少条顶层评论，默认 100。
+- `REPLY_THREADS_PER_POLL`：每轮最多请求多少个评论回复线程，默认 7。
 - `MAX_MEDIA_BYTES`：每条微博下载媒体的总大小预算，默认约 45 MB。
 - `MAX_MEDIA_PER_POST`：每条事件最多处理多少个媒体资源，默认 10。
 - `DATABASE_PATH`：数据库文件，Docker 默认 `/app/data/state.db`。

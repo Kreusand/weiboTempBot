@@ -72,7 +72,7 @@ class Settings:
             adminIds=adminIds,
             weiboCookies=cookies,
             pollIntervalSeconds=intEnv("POLL_INTERVAL_SECONDS", 120, 60),
-            commentsPollIntervalSeconds=intEnv("COMMENTS_POLL_INTERVAL_SECONDS", 300, 120),
+            commentsPollIntervalSeconds=intEnv("COMMENTS_POLL_INTERVAL_SECONDS", 300, 60),
             requestTimeoutSeconds=intEnv("REQUEST_TIMEOUT_SECONDS", 25, 5),
             maxMediaBytes=intEnv("MAX_MEDIA_BYTES", 45_000_000, 1_000_000),
             maxMediaPerPost=intEnv("MAX_MEDIA_PER_POST", 10, 1),
