@@ -21,6 +21,9 @@ logging.basicConfig(
     level=getattr(logging, settings.logLevel, logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# httpx logs every request URL at INFO level, and Telegram URLs contain the bot token.
+for noisyLogger in ("httpx", "httpcore"):
+    logging.getLogger(noisyLogger).setLevel(logging.WARNING)
 logger = logging.getLogger("weibo-tg-bot")
 
 

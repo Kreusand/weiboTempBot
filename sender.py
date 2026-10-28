@@ -1,5 +1,4 @@
 import asyncio
-import io
 import logging
 import mimetypes
 from urllib.parse import urljoin, urlparse
@@ -164,24 +163,22 @@ class TelegramSender:
         try:
             for group in mediaGroups:
                 built = []
-                buffers = []
+                inputFiles = []
                 for media, data, suffix in group:
-                    filename = f"weibo-media{suffix}"
-                    buffer = io.BytesIO(data)
-                    buffer.name = filename
-                    buffers.append(buffer)
-                    inputFile = InputFile(buffer, filename=filename)
+                    # Build each InputFile exactly once from raw bytes. Building a second one from a
+                    # BytesIO that the first already consumed produces an empty upload.
+                    inputFile = InputFile(data, filename=f"weibo-media{suffix}")
+                    inputFiles.append(inputFile)
                     if media.kind == "video":
                         built.append(InputMediaVideo(media=inputFile, caption=caption if firstGroup and not built else None))
                     else:
                         built.append(InputMediaPhoto(media=inputFile, caption=caption if firstGroup and not built else None))
                 if len(built) == 1:
-                    media, data, suffix = group[0]
-                    inputFile = InputFile(buffers[0], filename=f"weibo-media{suffix}")
+                    media = group[0][0]
                     if media.kind == "video":
-                        await bot.send_video(chat_id=chatId, video=inputFile, caption=caption if firstGroup else None)
+                        await bot.send_video(chat_id=chatId, video=inputFiles[0], caption=caption if firstGroup else None)
                     else:
-                        await bot.send_photo(chat_id=chatId, photo=inputFile, caption=caption if firstGroup else None)
+                        await bot.send_photo(chat_id=chatId, photo=inputFiles[0], caption=caption if firstGroup else None)
                 else:
                     await bot.send_media_group(chat_id=chatId, media=built)
                 firstGroup = False

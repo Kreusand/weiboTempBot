@@ -12,6 +12,7 @@ class FakeBot:
     def __init__(self, failMedia: bool = False):
         self.failMedia = failMedia
         self.texts: list[str] = []
+        self.uploaded: list[bytes] = []
 
     async def send_message(self, chat_id, text, disable_web_page_preview=False):
         self.texts.append(text)
@@ -19,6 +20,10 @@ class FakeBot:
     async def send_photo(self, chat_id, photo, caption=None):
         if self.failMedia:
             raise TelegramError("upload failed")
+        # Telegram rejects empty uploads with "File must be non-empty".
+        if not photo.input_file_content:
+            raise TelegramError("File must be non-empty")
+        self.uploaded.append(photo.input_file_content)
         self.texts.append(caption or "")
 
 
@@ -45,6 +50,18 @@ class SenderDiagnosticsTests(unittest.TestCase):
         with patch.object(sender, "_downloadMedia", fakeDownload):
             asyncio.run(sender.send(bot, "-1001", "name", makeItem(), diagnostics=diagnostics))
         return "\n".join(bot.texts)
+
+    def test_single_photo_upload_is_not_empty(self):
+        sender = TelegramSender(None, 45_000_000, 10, "")
+        bot = FakeBot()
+
+        async def fakeDownload(media, budget):
+            return (b"image-bytes", ".jpg")
+
+        with patch.object(sender, "_downloadMedia", fakeDownload):
+            asyncio.run(sender.send(bot, "-1001", "name", makeItem()))
+        self.assertEqual(bot.uploaded, [b"image-bytes"])
+        self.assertNotIn("sinaimg.cn", "\n".join(bot.texts))
 
     def test_download_failure_note_only_for_test(self):
         publicText = self.runSend(None, False, diagnostics=False)
