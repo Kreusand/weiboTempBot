@@ -6,6 +6,9 @@ from typing import Any
 from models import FeedItem, Source
 
 
+destinationKindValues = ("public", "test")
+
+
 def nowIso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -57,7 +60,8 @@ class Storage:
                 chatId TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
-                addedAt TEXT NOT NULL
+                addedAt TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'test'
             );
             CREATE TABLE IF NOT EXISTS deliveries (
                 sourceId INTEGER NOT NULL,
@@ -80,6 +84,8 @@ class Storage:
         self.ensureColumn("sources", "commentsInitialized", "INTEGER NOT NULL DEFAULT 0")
         self.ensureColumn("sources", "lastCommentsChecked", "TEXT")
         self.ensureColumn("sources", "lastCommentError", "TEXT")
+        # Destinations default to "test" so that diagnostics can never reach a public chat by accident.
+        self.ensureColumn("destinations", "kind", "TEXT NOT NULL DEFAULT 'test'")
         self.conn.commit()
 
     def ensureColumn(self, table: str, column: str, definition: str) -> None:
@@ -206,14 +212,16 @@ class Storage:
         self.conn.commit()
         return updated
 
-    def addDestination(self, chatId: str, name: str) -> None:
+    def addDestination(self, chatId: str, name: str, kind: str | None = None) -> None:
         chatId = chatId.strip()
         if not chatId:
-            raise ValueError("Chat ID 不能为空")
+            raise ValueError("Chat ID must not be empty")
+        if kind is not None and kind not in destinationKindValues:
+            raise ValueError("Destination kind must be 'public' or 'test'")
         self.conn.execute(
-            "INSERT INTO destinations(chatId,name,active,addedAt) VALUES(?,?,1,?) "
-            "ON CONFLICT(chatId) DO UPDATE SET name=excluded.name,active=1",
-            (chatId, name.strip() or chatId, nowIso()),
+            "INSERT INTO destinations(chatId,name,active,addedAt,kind) VALUES(?,?,1,?,?) "
+            "ON CONFLICT(chatId) DO UPDATE SET name=excluded.name,active=1,kind=COALESCE(?,kind)",
+            (chatId, name.strip() or chatId, nowIso(), kind or "test", kind),
         )
         # If there are existing unsent queue items, a newly added target can receive them.
         rows = self.conn.execute("SELECT sourceId,itemKey FROM posts WHERE status='pending'").fetchall()
@@ -240,13 +248,28 @@ class Storage:
         self.conn.commit()
         return True
 
-    def activeDestinations(self) -> list[dict[str, str]]:
-        rows = self.conn.execute("SELECT chatId,name FROM destinations WHERE active=1 ORDER BY addedAt").fetchall()
-        return [{"chatId": str(row["chatId"]), "name": str(row["name"])} for row in rows]
+    def setDestinationKind(self, chatId: str, kind: str) -> bool:
+        if kind not in destinationKindValues:
+            raise ValueError("Destination kind must be 'public' or 'test'")
+        cur = self.conn.execute("UPDATE destinations SET kind=? WHERE chatId=?", (kind, chatId.strip()))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def activeDestinations(self, kind: str | None = None) -> list[dict[str, str]]:
+        sql = "SELECT chatId,name,kind FROM destinations WHERE active=1"
+        params: list[Any] = []
+        if kind is not None:
+            sql += " AND kind=?"
+            params.append(kind)
+        rows = self.conn.execute(sql + " ORDER BY addedAt", params).fetchall()
+        return [{"chatId": str(row["chatId"]), "name": str(row["name"]), "kind": str(row["kind"])} for row in rows]
 
     def allDestinations(self) -> list[dict[str, str]]:
-        rows = self.conn.execute("SELECT chatId,name FROM destinations ORDER BY addedAt").fetchall()
-        return [{"chatId": str(row["chatId"]), "name": str(row["name"])} for row in rows]
+        rows = self.conn.execute("SELECT chatId,name,kind FROM destinations ORDER BY addedAt").fetchall()
+        return [{"chatId": str(row["chatId"]), "name": str(row["name"]), "kind": str(row["kind"])} for row in rows]
+
+    def destinationKinds(self) -> dict[str, str]:
+        return {item["chatId"]: item["kind"] for item in self.activeDestinations()}
 
     def pendingDeliveries(self, sourceId: int | None = None, limit: int = 50) -> list[tuple[Source, FeedItem, str]]:
         sql = (

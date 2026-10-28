@@ -128,7 +128,9 @@ class TelegramSender:
         logger.warning("媒体重定向过多，停止下载：%s", media.url)
         return None
 
-    async def send(self, bot, chatId: str, accountName: str, item: FeedItem) -> None:
+    async def send(self, bot, chatId: str, accountName: str, item: FeedItem, diagnostics: bool = False) -> None:
+        # With diagnostics=False (public destinations) only the post content is ever sent.
+        # Notes about failed media downloads or uploads are added only for test destinations.
         text = self._messageText(accountName, item)
         mediaList = item.media[: self.maxMediaPerPost]
         usableMedia: list[tuple[MediaItem, bytes, str]] = []
@@ -150,7 +152,7 @@ class TelegramSender:
                 mediaBudget -= len(downloaded[0])
 
         if not usableMedia:
-            if failedUrls:
+            if failedUrls and diagnostics:
                 text += "\n\n部分媒体无法下载：\n" + "\n".join(failedUrls[:5])
             await self._sendText(bot, chatId, text, disablePreview=False)
             return
@@ -187,13 +189,15 @@ class TelegramSender:
             # A media URL may produce an unsupported format despite looking like a media link.
             # Fall back to the textual post instead of retrying the whole item forever.
             logger.warning("Telegram 媒体上传失败，退回文字与原文链接：%s", exc)
-            fallbackText = text + "\n\n媒体上传失败，链接如下：\n" + "\n".join(x.url for x in mediaList[:10])
+            fallbackText = text
+            if diagnostics:
+                fallbackText += "\n\n媒体上传失败，链接如下：\n" + "\n".join(x.url for x in mediaList[:10])
             await self._sendText(bot, chatId, fallbackText, disablePreview=False)
             return
 
         if remainingText:
             await self._sendText(bot, chatId, remainingText, disablePreview=False)
-        if failedUrls:
+        if failedUrls and diagnostics:
             await self._sendText(
                 bot,
                 chatId,

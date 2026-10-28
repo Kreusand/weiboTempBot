@@ -49,6 +49,38 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.storage.backfillSkipped(self.source.id, 1), 1)
         self.assertEqual(len(self.storage.pendingDeliveries(self.source.id)), 1)
 
+    def test_destinations_default_to_test(self):
+        self.assertEqual(self.storage.activeDestinations()[0]["kind"], "test")
+        self.assertEqual(self.storage.activeDestinations("public"), [])
+
+    def test_set_destination_kind(self):
+        self.assertTrue(self.storage.setDestinationKind("-100123456", "public"))
+        self.assertEqual(self.storage.destinationKinds(), {"-100123456": "public"})
+        self.assertFalse(self.storage.setDestinationKind("-100999", "public"))
+        with self.assertRaises(ValueError):
+            self.storage.setDestinationKind("-100123456", "other")
+
+    def test_readding_destination_keeps_kind(self):
+        self.storage.setDestinationKind("-100123456", "public")
+        self.storage.addDestination("-100123456", "renamed")
+        self.assertEqual(self.storage.destinationKinds()["-100123456"], "public")
+
+    def test_old_database_migrates_to_test_kind(self):
+        import os
+        import sqlite3
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "old.db")
+            old = sqlite3.connect(path)
+            old.execute("CREATE TABLE destinations (chatId TEXT PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, addedAt TEXT NOT NULL)")
+            old.execute("INSERT INTO destinations VALUES('-1001','old',1,'2026-01-01T00:00:00+00:00')")
+            old.commit()
+            old.close()
+            migrated = Storage(path)
+            self.assertEqual(migrated.destinationKinds(), {"-1001": "test"})
+            migrated.close()
+
 
 if __name__ == "__main__":
     unittest.main()

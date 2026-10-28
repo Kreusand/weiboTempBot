@@ -3,6 +3,7 @@ import functools
 import logging
 import re
 import sys
+import time
 from datetime import datetime, timezone
 
 import aiohttp
@@ -23,16 +24,55 @@ logging.basicConfig(
 logger = logging.getLogger("weibo-tg-bot")
 
 
+alertCooldownSeconds = 1800
+
+
 def adminOnly(func):
+    """Admin commands work only in a private chat with an admin, or inside a test destination.
+
+    Anywhere else (public destinations, unknown groups) they are silently ignored, so command
+    replies, which can contain errors and internal state, never appear in a public chat.
+    """
+
     @functools.wraps(func)
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if user is None or user.id not in settings.adminIds:
-            if update.effective_message:
-                await update.effective_message.reply_text("无权限。此命令仅供 ADMIN_IDS 中的管理员使用。")
+        chat = update.effective_chat
+        message = update.effective_message
+        if user is None or chat is None or message is None:
+            return
+        isPrivate = chat.type == "private"
+        if user.id not in settings.adminIds:
+            if isPrivate:
+                await message.reply_text("This command is not available.")
+            return
+        if not isPrivate and not isTestChat(context, chat):
             return
         return await func(update, context)
     return wrapped
+
+
+def isTestChat(context: ContextTypes.DEFAULT_TYPE, chat) -> bool:
+    testIds = {item["chatId"].lower() for item in store(context).activeDestinations("test")}
+    if str(chat.id) in testIds:
+        return True
+    return chat.username is not None and "@" + chat.username.lower() in testIds
+
+
+async def notifyTest(application: Application, key: str, text: str) -> None:
+    """Send an error alert to test destinations only, at most once per key per cooldown period."""
+    alertTimes: dict[str, float] = application.bot_data.setdefault("alertTimes", {})
+    now = time.monotonic()
+    lastSent = alertTimes.get(key)
+    if lastSent is not None and now - lastSent < alertCooldownSeconds:
+        return
+    alertTimes[key] = now
+    storage: Storage = application.bot_data["storage"]
+    for destination in storage.activeDestinations("test"):
+        try:
+            await application.bot.send_message(chat_id=destination["chatId"], text=text[:3900])
+        except Exception:
+            logger.warning("Could not deliver an alert to test destination %s", destination["chatId"])
 
 
 def store(context: ContextTypes.DEFAULT_TYPE) -> Storage:
@@ -69,9 +109,11 @@ async def deliverPendingWorker(application: Application, sourceId: int | None, l
     sender: TelegramSender = application.bot_data["sender"]
     delivered = 0
     failed = 0
+    kinds = storage.destinationKinds()
     for source, item, chatId in storage.pendingDeliveries(sourceId, limit):
         try:
-            await sender.send(application.bot, chatId, source.name, item)
+            # Only test destinations receive diagnostic notes; public ones get content only.
+            await sender.send(application.bot, chatId, source.name, item, diagnostics=kinds.get(chatId) == "test")
             storage.markDeliverySent(source.id, item.itemKey, chatId)
             delivered += 1
             logger.info("推送成功 uid=%s type=%s chat=%s key=%s", source.uid, item.eventType, chatId, item.itemKey[:12])
@@ -79,6 +121,11 @@ async def deliverPendingWorker(application: Application, sourceId: int | None, l
             storage.markDeliveryFailed(source.id, item.itemKey, chatId, str(exc))
             failed += 1
             logger.exception("推送失败 uid=%s type=%s chat=%s", source.uid, item.eventType, chatId)
+            await notifyTest(
+                application,
+                f"deliver:{chatId}",
+                f"[ERROR] Delivery to {chatId} failed for {source.name} ({item.eventType}): {exc}",
+            )
     return delivered, failed
 
 
@@ -133,9 +180,11 @@ async def pollSourceWorker(application: Application, source, forceComments: bool
             except WeiboAuthError as exc:
                 storage.markCommentsChecked(source.id, str(exc))
                 logger.warning("账号 %s 评论读取登录态错误：%s", source.uid, exc)
+                await notifyTest(application, f"comments:{source.uid}", f"[ERROR] Comment auth problem for {source.name} ({source.uid}): {exc}")
             except Exception as exc:
                 storage.markCommentsChecked(source.id, str(exc))
                 logger.exception("账号 %s 评论扫描失败", source.uid)
+                await notifyTest(application, f"comments:{source.uid}", f"[ERROR] Comment scan failed for {source.name} ({source.uid}): {exc}")
 
         storage.markChecked(source.id)
         sentCount, failedCount = await deliverPending(application, source.id, limit=max(20, settings.maxCatchupItems))
@@ -160,6 +209,7 @@ async def pollLoop(application: Application) -> None:
                         logger.info(result)
                     except Exception as exc:
                         logger.warning("账号 %s 本轮跳过：%s", source.uid, exc)
+                        await notifyTest(application, f"poll:{source.uid}", f"[ERROR] Polling failed for {source.name} ({source.uid}): {exc}")
                 await deliverPending(application, limit=50)
         except asyncio.CancelledError:
             raise
@@ -237,8 +287,11 @@ async def helpCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "Telegram 目标：\n"
         "/destadd <ChatID或@频道> [名称] — 增加推送群组/频道\n"
         "/destremove <ChatID或@频道> — 移除目标\n"
+        "/destset <ChatID或@频道> <public|test> — 设置目标类型（新目标默认 test）\n"
         "/destlist — 列出推送目标\n"
-        "/test — 向所有目标发送测试消息\n\n"
+        "/test — 向所有 test 目标发送测试消息\n\n"
+        "public 目标只收到微博内容；错误、测试消息和诊断信息只发往 test 目标。\n"
+        "管理命令只在与管理员的私聊或 test 目标中生效。\n\n"
         "其他：\n"
         "/me — 检查微博登录状态\n"
         "/pause、/resume — 暂停/恢复自动同步\n"
@@ -377,7 +430,8 @@ async def destAddCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     store(context).addDestination(chatId, name)
     await update.effective_message.reply_text(
-        f"已添加目标：{name}（{chatId}）。请确认 Bot 已加入群组/频道并拥有发送消息权限。"
+        f"已添加目标：{name}（{chatId}），类型：test。请确认 Bot 已加入群组/频道并拥有发送消息权限。\n"
+        f"Use /destset {chatId} public to make it a public destination."
     )
 
 
@@ -392,6 +446,17 @@ async def destRemoveCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 @adminOnly
+async def destSetCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) != 2 or context.args[1].lower() not in ("public", "test"):
+        await update.effective_message.reply_text("Usage: /destset <ChatID or @channel> <public|test>")
+        return
+    chatId = context.args[0].strip()
+    kind = context.args[1].lower()
+    ok = store(context).setDestinationKind(chatId, kind)
+    await update.effective_message.reply_text(f"{chatId} is now a {kind} destination." if ok else "Destination not found.")
+
+
+@adminOnly
 async def destListCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     destinations = store(context).allDestinations()
     if not destinations:
@@ -401,16 +466,16 @@ async def destListCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     active = {item["chatId"] for item in store(context).activeDestinations()}
     for dest in destinations:
         status = "启用" if dest["chatId"] in active else "已移除"
-        lines.append(f"• {dest['name']}：{dest['chatId']}（{status}）")
+        lines.append(f"• {dest['name']}：{dest['chatId']}（{status}，{dest['kind']}）")
     await update.effective_message.reply_text("\n".join(lines))
 
 
 @adminOnly
 async def testCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     bot = context.application.bot
-    destinations = store(context).activeDestinations()
+    destinations = store(context).activeDestinations("test")
     if not destinations:
-        await update.effective_message.reply_text("没有可用目标。先用 /destadd 添加。")
+        await update.effective_message.reply_text("No test destination. Add one with /destadd, public destinations never receive test messages.")
         return
     results = []
     for destination in destinations:
@@ -490,6 +555,7 @@ def main() -> None:
         ("disable", disableCommand),
         ("enable", enableCommand),
         ("destadd", destAddCommand),
+        ("destset", destSetCommand),
         ("destremove", destRemoveCommand),
         ("destlist", destListCommand),
         ("test", testCommand),
