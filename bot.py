@@ -14,7 +14,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from config import Settings
 from sender import TelegramSender
 from storage import Storage
-from weibo_client import WeiboAuthError, WeiboClient, WeiboRequestError, sortNewestFirst
+from weibo_client import WeiboAuthError, WeiboClient, WeiboRequestError, isPinned, sortNewestFirst
 
 settings = Settings.load()
 logging.basicConfig(
@@ -436,7 +436,9 @@ async def latestCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if label == uid and name:
                 label = name
             items = []
-            for status in sortNewestFirst(statuses):
+            # Pinned posts are old posts shown at the top, not the newest ones.
+            pinnedCount = sum(1 for status in statuses if isPinned(status))
+            for status in sortNewestFirst([status for status in statuses if not isPinned(status)]):
                 item = await client.toFeedItem(uid, status)
                 if mediaOnly and not item.media:
                     continue
@@ -448,7 +450,7 @@ async def latestCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if not items:
         scope = "with photos or videos " if mediaOnly else ""
-        await message.reply_text(f"No posts {scope}found among the {len(statuses)} most recent ones.")
+        await message.reply_text(f"No posts {scope}found among the {len(statuses)} most recent ones ({pinnedCount} pinned skipped).")
         return
 
     failures = []
@@ -459,7 +461,7 @@ async def latestCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await sender.send(context.application.bot, destination["chatId"], label, item, diagnostics=True)
             except Exception as exc:
                 failures.append(f"{destination['name']}: {exc}")
-    summary = f"Sent {len(items)} post(s) of {label} to {len(destinations)} test destination(s). Nothing was queued or saved."
+    summary = f"Sent {len(items)} post(s) of {label} to {len(destinations)} test destination(s). Nothing was queued or saved. Pinned posts skipped: {pinnedCount}."
     if failures:
         summary += "\nFailures:\n" + "\n".join(failures)
     await message.reply_text(summary[:3900])

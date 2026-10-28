@@ -76,6 +76,29 @@ def sortNewestFirst(statuses: list[dict]) -> list[dict]:
     return sorted(statuses, key=idKey, reverse=True)
 
 
+def isPinned(status: dict) -> bool:
+    """True for a post the account pinned to the top of its timeline."""
+    for field in ("isTop", "is_top", "isPinnedCard"):
+        if status.get(field) in (1, "1", True):
+            return True
+    title = status.get("title")
+    # "\u7f6e\u9876" is the pinned label Weibo attaches to such posts.
+    return isinstance(title, dict) and "\u7f6e\u9876" in str(title.get("text") or "")
+
+
+def videoPageLink(status: dict, videoMedia: list[MediaItem]) -> str:
+    """Return the page link of a video post, or an empty string for any other attachment.
+
+    page_info is also used for topic pages, articles and links, which are not videos.
+    """
+    pageInfo = status.get("page_info") or {}
+    link = str(pageInfo.get("page_url") or "").strip()
+    isVideo = str(pageInfo.get("type") or "").lower() == "video" or bool(videoMedia)
+    if isVideo and link.startswith(("http://", "https://")):
+        return link
+    return ""
+
+
 def dateString(value) -> str:
     if not value:
         return ""
@@ -278,6 +301,8 @@ class WeiboClient:
     def _statusesFromCard(card: dict) -> list[dict]:
         result: list[dict] = []
         if isinstance(card.get("mblog"), dict):
+            if str(card.get("profile_type_id") or "").startswith("proweibotop"):
+                card["mblog"]["isPinnedCard"] = True
             result.append(card["mblog"])
         for child in card.get("card_group") or []:
             if isinstance(child, dict) and isinstance(child.get("mblog"), dict):
@@ -322,8 +347,8 @@ class WeiboClient:
         author = str(userInfo.get("screen_name") or uid)
         title = author + " 的微博"
         link = makeStatusLink(uid, status)
-        videoPage = str((status.get("page_info") or {}).get("page_url") or "").strip()
-        if videoPage and videoPage.startswith(("http://", "https://")) and videoPage not in text:
+        videoPage = videoPageLink(status, videoMedia)
+        if videoPage and videoPage not in text:
             text = (text + "\n\n视频页面：" + videoPage).strip()
         published = dateString(status.get("created_at"))
         tags = statusTags(status, media)

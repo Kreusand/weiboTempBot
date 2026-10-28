@@ -1,10 +1,25 @@
 import unittest
 
 
-from weibo_client import WeiboClient, collectPhotos, collectVideo, statusTags, cleanHtml, sortNewestFirst
+from weibo_client import WeiboClient, collectPhotos, collectVideo, statusTags, cleanHtml, isPinned, sortNewestFirst, videoPageLink
 
 
 class WeiboClientTests(unittest.TestCase):
+    def test_topic_page_is_not_a_video_page(self):
+        topic = {"page_info": {"type": "topic", "page_url": "https://m.weibo.cn/p/index?containerid=100808abc"}}
+        self.assertEqual(videoPageLink(topic, []), "")
+
+    def test_video_page_is_kept_for_real_videos(self):
+        video = {"page_info": {"type": "video", "page_url": "https://video.weibo.com/show?fid=1"}}
+        self.assertEqual(videoPageLink(video, []), "https://video.weibo.com/show?fid=1")
+
+    def test_is_pinned_signals(self):
+        self.assertTrue(isPinned({"isTop": 1}))
+        self.assertTrue(isPinned({"isPinnedCard": True}))
+        self.assertTrue(isPinned({"title": {"text": "\u7f6e\u9876"}}))
+        self.assertFalse(isPinned({"isTop": 0, "title": {"text": "other"}}))
+        self.assertFalse(isPinned({}))
+
     def test_sort_newest_first_moves_pinned_post_down(self):
         statuses = [{"idstr": "100"}, {"idstr": "300"}, {"idstr": "200"}]
         self.assertEqual([item["idstr"] for item in sortNewestFirst(statuses)], ["300", "200", "100"])

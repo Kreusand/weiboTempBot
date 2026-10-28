@@ -11,6 +11,8 @@ from models import FeedItem, MediaItem
 
 logger = logging.getLogger(__name__)
 VIDEO_EXTENSIONS = (".mp4", ".m4v", ".mov", ".webm")
+# Albums of several large images need far more time than the library defaults (5 s read, 20 s upload).
+uploadTimeouts = {"read_timeout": 60, "write_timeout": 120, "connect_timeout": 20}
 
 
 class TelegramSender:
@@ -167,7 +169,9 @@ class TelegramSender:
                 for media, data, suffix in group:
                     # Build each InputFile exactly once from raw bytes. Building a second one from a
                     # BytesIO that the first already consumed produces an empty upload.
-                    inputFile = InputFile(data, filename=f"weibo-media{suffix}")
+                    # Album members must be attached, otherwise the request carries no "media"
+                    # reference for them and Telegram rejects the whole album.
+                    inputFile = InputFile(data, filename=f"weibo-media{suffix}", attach=len(group) > 1)
                     inputFiles.append(inputFile)
                     if media.kind == "video":
                         built.append(InputMediaVideo(media=inputFile, caption=caption if firstGroup and not built else None))
@@ -176,11 +180,11 @@ class TelegramSender:
                 if len(built) == 1:
                     media = group[0][0]
                     if media.kind == "video":
-                        await bot.send_video(chat_id=chatId, video=inputFiles[0], caption=caption if firstGroup else None)
+                        await bot.send_video(chat_id=chatId, video=inputFiles[0], caption=caption if firstGroup else None, **uploadTimeouts)
                     else:
-                        await bot.send_photo(chat_id=chatId, photo=inputFiles[0], caption=caption if firstGroup else None)
+                        await bot.send_photo(chat_id=chatId, photo=inputFiles[0], caption=caption if firstGroup else None, **uploadTimeouts)
                 else:
-                    await bot.send_media_group(chat_id=chatId, media=built)
+                    await bot.send_media_group(chat_id=chatId, media=built, **uploadTimeouts)
                 firstGroup = False
         except TelegramError as exc:
             # A media URL may produce an unsupported format despite looking like a media link.
@@ -188,7 +192,11 @@ class TelegramSender:
             logger.warning("Telegram 媒体上传失败，退回文字与原文链接：%s", exc)
             fallbackText = text
             if diagnostics:
-                fallbackText += "\n\n媒体上传失败，链接如下：\n" + "\n".join(x.url for x in mediaList[:10])
+                fallbackText += (
+                    f"\n\nMedia upload failed: {type(exc).__name__}: {exc}\n"
+                    f"({len(usableMedia)} files, {sum(len(entry[1]) for entry in usableMedia) // 1024} KB in total)\n"
+                    + "\n".join(x.url for x in mediaList[:10])
+                )
             await self._sendText(bot, chatId, fallbackText, disablePreview=False)
             return
 
