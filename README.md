@@ -87,6 +87,7 @@ python bot.py
 | `/list` | 查看监控账号、基线和错误 |
 | `/check [UID或名称]` | 立即检查账号；无参数时检查所有启用账号 |
 | `/backfill UID [条数]` | 补发首次基线中最近的记录，范围 1–100 |
+| `/latest [UID或名称] [条数] [media]` | 把最新 1–10 条微博只发到 `test` 目标用于测试；加 `media` 只选带图片/视频的；不写数据库，不影响基线和去重 |
 | `/disable UID或名称` / `/enable UID或名称` | 暂停/恢复某账号的监控 |
 | `/destadd ChatID或@频道 [名称]` | 添加推送目标 |
 | `/destremove ChatID或@频道` | 移除推送目标并取消该目标未发送的任务 |

@@ -14,7 +14,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from config import Settings
 from sender import TelegramSender
 from storage import Storage
-from weibo_client import WeiboAuthError, WeiboClient, WeiboRequestError
+from weibo_client import WeiboAuthError, WeiboClient, WeiboRequestError, sortNewestFirst
 
 settings = Settings.load()
 logging.basicConfig(
@@ -286,6 +286,7 @@ async def helpCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "/list — 查看账号、状态及错误\n"
         "/check [UID或名称] — 立即检查一个或全部账号\n"
         "/backfill <UID或名称> [条数] — 补发首次基线中最近的微博/事件\n"
+        "/latest [UID或名称] [条数1-10] [media] — 把最新几条微博只发到 test 目标，用于测试；media 表示只选带图片/视频的，不写入数据库\n"
         "/disable <UID或名称>、/enable <UID或名称> — 停用/启用账号\n\n"
         "Telegram 目标：\n"
         "/destadd <ChatID或@频道> [名称] — 增加推送群组/频道\n"
@@ -377,6 +378,91 @@ async def checkCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception as exc:
             results.append(f"{source.name}（{source.uid}）：检查失败：{exc}")
     await update.effective_message.reply_text("\n\n".join(results)[:3900])
+
+
+def parseLatestArgs(args: list[str]) -> tuple[str, int, bool]:
+    """Parse "/latest [UID or name] [count] [media]" into (key, count, mediaOnly)."""
+    key = []
+    count = 1
+    mediaOnly = False
+    for arg in args:
+        lowered = arg.lower()
+        if lowered == "media":
+            mediaOnly = True
+        elif arg.isdigit() and len(arg) <= 2:
+            # Weibo UIDs have at least 4 digits, so a short number is the count.
+            count = max(1, min(int(arg), 10))
+        else:
+            key.append(arg)
+    return " ".join(key).strip(), count, mediaOnly
+
+
+@adminOnly
+async def latestCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the newest posts of an account to the test destinations only.
+
+    Nothing is written to the database, so this neither affects the baseline nor the
+    deduplication of real updates, and public destinations never receive anything.
+    """
+    message = update.effective_message
+    storage = store(context)
+    key, count, mediaOnly = parseLatestArgs(context.args)
+    if key:
+        source = storage.getSource(key)
+        if source is not None:
+            uid, label = source.uid, source.name
+        elif re.fullmatch(r"\d{4,30}", key):
+            uid, label = key, key
+        else:
+            await message.reply_text("Account not found. Use /list, or pass a numeric Weibo UID.")
+            return
+    else:
+        active = storage.listSources(activeOnly=True)
+        if not active:
+            await message.reply_text("No active account. Add one with /add, or pass a UID.")
+            return
+        uid, label = active[0].uid, active[0].name
+
+    destinations = storage.activeDestinations("test")
+    if not destinations:
+        await message.reply_text("No test destination. Add one with /destadd, public destinations never receive this.")
+        return
+
+    client: WeiboClient = context.application.bot_data["weiboClient"]
+    sender: TelegramSender = context.application.bot_data["sender"]
+    try:
+        async with context.application.bot_data["pollLock"]:
+            name, statuses = await client.getTimeline(uid)
+            if label == uid and name:
+                label = name
+            items = []
+            for status in sortNewestFirst(statuses):
+                item = await client.toFeedItem(uid, status)
+                if mediaOnly and not item.media:
+                    continue
+                items.append(item)
+                if len(items) >= count:
+                    break
+    except Exception as exc:
+        await message.reply_text(f"Could not read the timeline: {exc}"[:3900])
+        return
+    if not items:
+        scope = "with photos or videos " if mediaOnly else ""
+        await message.reply_text(f"No posts {scope}found among the {len(statuses)} most recent ones.")
+        return
+
+    failures = []
+    # Oldest first, so the newest post ends up at the bottom of the chat.
+    for item in reversed(items):
+        for destination in destinations:
+            try:
+                await sender.send(context.application.bot, destination["chatId"], label, item, diagnostics=True)
+            except Exception as exc:
+                failures.append(f"{destination['name']}: {exc}")
+    summary = f"Sent {len(items)} post(s) of {label} to {len(destinations)} test destination(s). Nothing was queued or saved."
+    if failures:
+        summary += "\nFailures:\n" + "\n".join(failures)
+    await message.reply_text(summary[:3900])
 
 
 @adminOnly
@@ -555,6 +641,7 @@ def main() -> None:
         ("list", listCommand),
         ("check", checkCommand),
         ("backfill", backfillCommand),
+        ("latest", latestCommand),
         ("disable", disableCommand),
         ("enable", enableCommand),
         ("destadd", destAddCommand),

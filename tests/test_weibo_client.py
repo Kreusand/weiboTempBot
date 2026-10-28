@@ -1,10 +1,14 @@
 import unittest
 
 
-from weibo_client import WeiboClient, collectPhotos, collectVideo, statusTags, cleanHtml
+from weibo_client import WeiboClient, collectPhotos, collectVideo, statusTags, cleanHtml, sortNewestFirst
 
 
 class WeiboClientTests(unittest.TestCase):
+    def test_sort_newest_first_moves_pinned_post_down(self):
+        statuses = [{"idstr": "100"}, {"idstr": "300"}, {"idstr": "200"}]
+        self.assertEqual([item["idstr"] for item in sortNewestFirst(statuses)], ["300", "200", "100"])
+
     def test_clean_html(self):
         self.assertEqual(cleanHtml("<span>你好</span><br><span>世界</span>"), "你好 世界")
 

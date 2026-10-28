@@ -63,6 +63,19 @@ def statusIdOf(status: dict) -> str:
     return str(status.get("idstr") or status.get("id") or status.get("mid") or "")
 
 
+def sortNewestFirst(statuses: list[dict]) -> list[dict]:
+    """Order statuses newest first.
+
+    Weibo status ids grow with time, so sorting by id also moves a pinned old post
+    to its real position instead of leaving it at the top of the timeline.
+    """
+    def idKey(status: dict) -> int:
+        raw = statusIdOf(status)
+        return int(raw) if raw.isdigit() else 0
+
+    return sorted(statuses, key=idKey, reverse=True)
+
+
 def dateString(value) -> str:
     if not value:
         return ""
