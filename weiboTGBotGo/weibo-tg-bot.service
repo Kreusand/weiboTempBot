@@ -1,0 +1,17 @@
+[Unit]
+Description=Weibo to Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/weibo-tg-bot
+ExecStart=/opt/weibo-tg-bot/weibo-tg-bot
+Restart=always
+RestartSec=10
+# The bot needs no privileges, and the memory cap keeps a fault from taking the whole server down.
+User=weibobot
+NoNewPrivileges=true
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target
