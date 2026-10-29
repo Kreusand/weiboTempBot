@@ -40,7 +40,8 @@ class Storage:
                 createdAt TEXT NOT NULL,
                 commentsInitialized INTEGER NOT NULL DEFAULT 0,
                 lastCommentsChecked TEXT,
-                lastCommentError TEXT
+                lastCommentError TEXT,
+                kind TEXT NOT NULL DEFAULT 'test'
             );
             CREATE TABLE IF NOT EXISTS posts (
                 sourceId INTEGER NOT NULL,
@@ -86,6 +87,8 @@ class Storage:
         self.ensureColumn("sources", "lastCommentError", "TEXT")
         # Destinations default to "test" so that diagnostics can never reach a public chat by accident.
         self.ensureColumn("destinations", "kind", "TEXT NOT NULL DEFAULT 'test'")
+        # Accounts default to "test" for the same reason: nothing becomes public by accident.
+        self.ensureColumn("sources", "kind", "TEXT NOT NULL DEFAULT 'test'")
         self.conn.commit()
 
     def ensureColumn(self, table: str, column: str, definition: str) -> None:
@@ -96,11 +99,13 @@ class Storage:
     def close(self) -> None:
         self.conn.close()
 
-    def addSource(self, uid: str, name: str) -> Source:
+    def addSource(self, uid: str, name: str, kind: str = "test") -> Source:
+        if kind not in destinationKindValues:
+            raise ValueError("Account kind must be 'public' or 'test'")
         try:
             cur = self.conn.execute(
-                "INSERT INTO sources(uid, name, feedUrl, createdAt) VALUES(?, ?, '', ?)",
-                (uid, name, nowIso()),
+                "INSERT INTO sources(uid, name, feedUrl, createdAt, kind) VALUES(?, ?, '', ?, ?)",
+                (uid, name, nowIso(), kind),
             )
             self.conn.commit()
         except sqlite3.IntegrityError as exc:
@@ -118,6 +123,35 @@ class Storage:
             "SELECT * FROM sources WHERE uid=? OR name=? ORDER BY id LIMIT 1", (uidOrName, uidOrName)
         ).fetchone()
         return self.sourceFromRow(row) if row else None
+
+    def setSourceKind(self, uidOrName: str, kind: str) -> bool:
+        if kind not in destinationKindValues:
+            raise ValueError("Account kind must be 'public' or 'test'")
+        source = self.getSource(uidOrName)
+        if source is None:
+            return False
+        self.conn.execute("UPDATE sources SET kind=? WHERE id=?", (kind, source.id))
+        if kind == "test":
+            # Anything of this account still waiting for a public destination must not go out any more.
+            self.conn.execute(
+                "UPDATE deliveries SET status='cancelled' WHERE sourceId=? AND status='pending' "
+                "AND chatId IN (SELECT chatId FROM destinations WHERE kind='public')",
+                (source.id,),
+            )
+            self.conn.execute(
+                "UPDATE posts SET status='sent',sentAt=? WHERE sourceId=? AND status='pending' AND NOT EXISTS "
+                "(SELECT 1 FROM deliveries d WHERE d.sourceId=posts.sourceId AND d.itemKey=posts.itemKey AND d.status='pending')",
+                (nowIso(), source.id),
+            )
+        self.conn.commit()
+        return True
+
+    def eligibleDestinations(self, sourceId: int) -> list[dict[str, str]]:
+        """Destinations that may receive content of this account: test accounts only reach test destinations."""
+        row = self.conn.execute("SELECT kind FROM sources WHERE id=?", (sourceId,)).fetchone()
+        if row is not None and str(row["kind"]) == "public":
+            return self.activeDestinations()
+        return self.activeDestinations("test")
 
     def listSources(self, activeOnly: bool = False) -> list[Source]:
         sql = "SELECT * FROM sources"
@@ -180,7 +214,7 @@ class Storage:
         if cur.rowcount == 0:
             return False
         if not skip:
-            destinations = self.activeDestinations()
+            destinations = self.eligibleDestinations(sourceId)
             for destination in destinations:
                 self.conn.execute(
                     "INSERT OR IGNORE INTO deliveries(sourceId,itemKey,chatId,status) VALUES(?,?,?,'pending')",
@@ -194,7 +228,7 @@ class Storage:
             "SELECT itemKey FROM posts WHERE sourceId=? AND status='skipped' ORDER BY discoveredAt DESC LIMIT ?",
             (sourceId, count),
         ).fetchall()
-        destinations = self.activeDestinations()
+        destinations = self.eligibleDestinations(sourceId)
         updated = 0
         for row in rows:
             key = str(row["itemKey"])
@@ -224,7 +258,13 @@ class Storage:
             (chatId, name.strip() or chatId, nowIso(), kind or "test", kind),
         )
         # If there are existing unsent queue items, a newly added target can receive them.
-        rows = self.conn.execute("SELECT sourceId,itemKey FROM posts WHERE status='pending'").fetchall()
+        # A public destination only receives pending items of public accounts.
+        destinationKind = str(self.conn.execute("SELECT kind FROM destinations WHERE chatId=?", (chatId,)).fetchone()["kind"])
+        rows = self.conn.execute(
+            "SELECT p.sourceId,p.itemKey FROM posts p JOIN sources s ON s.id=p.sourceId "
+            "WHERE p.status='pending' AND (?='test' OR s.kind='public')",
+            (destinationKind,),
+        ).fetchall()
         for row in rows:
             self.conn.execute(
                 "INSERT OR IGNORE INTO deliveries(sourceId,itemKey,chatId,status) VALUES(?,?,?,'pending')",
@@ -276,7 +316,8 @@ class Storage:
             "SELECT d.sourceId,d.itemKey,d.chatId,p.payloadJson FROM deliveries d "
             "JOIN posts p ON p.sourceId=d.sourceId AND p.itemKey=d.itemKey "
             "JOIN destinations t ON t.chatId=d.chatId AND t.active=1 "
-            "WHERE d.status='pending' AND (d.nextAttemptAt IS NULL OR d.nextAttemptAt<=?)"
+            "JOIN sources s ON s.id=d.sourceId "
+            "WHERE (s.kind='public' OR t.kind='test') AND d.status='pending' AND (d.nextAttemptAt IS NULL OR d.nextAttemptAt<=?)"
         )
         params: list[Any] = [nowIso()]
         if sourceId is not None:
@@ -367,4 +408,5 @@ class Storage:
             lastError=row["lastError"],
             lastCommentsChecked=row["lastCommentsChecked"],
             lastCommentError=row["lastCommentError"],
+            kind=str(row["kind"]),
         )

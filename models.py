@@ -53,3 +53,5 @@ class Source:
     lastError: str | None
     lastCommentsChecked: str | None
     lastCommentError: str | None
+    # "public" content may reach public destinations, "test" content only reaches test destinations.
+    kind: str = "test"

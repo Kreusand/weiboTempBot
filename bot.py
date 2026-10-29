@@ -91,7 +91,7 @@ def sourceListText(sources) -> str:
         postInit = "微博基线已建立" if source.initialized else "待建立微博基线"
         commentInit = "评论基线已建立" if source.commentsInitialized else "待建立评论基线"
         lastCheck = source.lastChecked or "未检查"
-        lines.append(f"• {source.name}（{source.uid}）：{state}；{postInit}；{commentInit}；最近检查 {lastCheck}")
+        lines.append(f"• {source.name}（{source.uid}）：{source.kind}；{state}；{postInit}；{commentInit}；最近检查 {lastCheck}")
         if source.lastError:
             lines.append(f"  动态错误：{source.lastError[:180]}")
         if source.lastCommentError:
@@ -281,7 +281,8 @@ async def startCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def helpCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text(
         "监控账号：\n"
-        "/add <UID> [名称] — 添加微博账号\n"
+        "/add <UID> [public|test] [名称] — 添加微博账号（默认 test，内容只发往 test 目标）\n"
+        "/srcset <UID或名称> <public|test> — 设置账号类型，public 账号的内容才会发往 public 目标\n"
         "/remove <UID或名称> — 删除微博账号\n"
         "/list — 查看账号、状态及错误\n"
         "/check [UID或名称] — 立即检查一个或全部账号\n"
@@ -294,7 +295,7 @@ async def helpCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "/destset <ChatID或@频道> <public|test> — 设置目标类型（新目标默认 test）\n"
         "/destlist — 列出推送目标\n"
         "/test — 向所有 test 目标发送测试消息\n\n"
-        "public 目标只收到微博内容；错误、测试消息和诊断信息只发往 test 目标。\n"
+        "public 目标只收到 public 账号的微博内容；test 账号、错误、测试消息和诊断信息只发往 test 目标。\n"
         "管理命令只在与管理员的私聊或 test 目标中生效。\n\n"
         "其他：\n"
         "/me — 检查微博登录状态\n"
@@ -322,23 +323,29 @@ async def meCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @adminOnly
 async def addCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
     if not context.args:
-        await update.effective_message.reply_text("用法：/add <微博UID> [名称]")
+        await message.reply_text("Usage: /add <UID> [public|test] [name]\nNew accounts are test accounts unless you say public.")
         return
     uid = context.args[0].strip()
     if not re.fullmatch(r"\d{4,30}", uid):
-        await update.effective_message.reply_text("UID 应是数字形式的微博用户 ID。")
+        await message.reply_text("UID 应是数字形式的微博用户 ID。")
         return
-    name = " ".join(context.args[1:]).strip() or uid
+    rest = context.args[1:]
+    kind = "test"
+    if rest and rest[0].lower() in ("public", "test"):
+        kind = rest[0].lower()
+        rest = rest[1:]
+    name = " ".join(rest).strip() or uid
     try:
-        source = store(context).addSource(uid, name)
+        source = store(context).addSource(uid, name, kind)
     except ValueError as exc:
-        await update.effective_message.reply_text(str(exc))
+        await message.reply_text(str(exc))
         return
-    message = update.effective_message
+    audience = "all destinations" if kind == "public" else "test destinations only"
     await message.reply_text(
-        f"Added Weibo account {source.name} (UID {uid}). Building the baseline now: "
-        "existing posts and comments are recorded but not pushed."
+        f"Added Weibo account {source.name} (UID {uid}) as a {kind} account, its content goes to {audience}. "
+        "Building the baseline now: existing posts and comments are recorded but not pushed."
     )
     # Build the baseline right away. Waiting for the next poll cycle would let a post made in
     # the meantime be swallowed into the baseline instead of being pushed.
@@ -349,6 +356,22 @@ async def addCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await message.reply_text(
             f"Baseline failed: {exc}\nRegular polling will retry it, or run /check {uid}."[:3900]
         )
+
+
+@adminOnly
+async def srcSetCommand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Make an account public or test. Test accounts never reach public destinations."""
+    message = update.effective_message
+    if len(context.args) < 2 or context.args[-1].lower() not in ("public", "test"):
+        await message.reply_text("Usage: /srcset <UID or name> <public|test>")
+        return
+    key = " ".join(context.args[:-1]).strip()
+    kind = context.args[-1].lower()
+    if store(context).setSourceKind(key, kind):
+        extra = " Content still waiting for public destinations was cancelled." if kind == "test" else ""
+        await message.reply_text(f"{key} is now a {kind} account.{extra}")
+    else:
+        await message.reply_text("Account not found. Use /list.")
 
 
 @adminOnly
@@ -665,6 +688,7 @@ def main() -> None:
         ("help", helpCommand),
         ("me", meCommand),
         ("add", addCommand),
+        ("srcset", srcSetCommand),
         ("remove", removeCommand),
         ("list", listCommand),
         ("check", checkCommand),
