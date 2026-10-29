@@ -3,3 +3,5 @@ data/
 weibo-tg-bot
 weibo-tg-bot.exe
 weibo-tg-bot-arm64
+*.exe
+fixDir/

@@ -30,7 +30,7 @@ func TestDefaultSettings(t *testing.T) {
 	if settings.MaxMediaBytes != 45_000_000 || settings.TimelinePages != 3 || settings.CommentsWatchPosts != 20 || settings.ReplyThreadsPerPoll != 12 {
 		t.Errorf("unexpected defaults %+v", settings)
 	}
-	if !settings.AdminIDs[1] || !settings.AdminIDs[2] || len(settings.AdminIDs) != 2 || settings.StatePath != "./data/state.json" || settings.LogLevel != "INFO" {
+	if !settings.AdminIDs[1] || !settings.AdminIDs[2] || len(settings.AdminIDs) != 2 || settings.DatabasePath != "./data/state.db" || settings.LogLevel != "INFO" {
 		t.Errorf("unexpected values %+v", settings)
 	}
 }
@@ -73,12 +73,24 @@ func TestInvalidSettingsAreRejected(t *testing.T) {
 func TestOptionalSettings(t *testing.T) {
 	values := baseSettings()
 	values["TELEGRAM_CHAT_ID"] = " -100500 "
-	values["STATE_PATH"] = "/tmp/x.json"
+	values["DATABASE_PATH"] = "/tmp/x.db"
 	values["LOG_LEVEL"] = "debug"
 	values["MAX_MEDIA_BYTES"] = "45_000_000"
 	settings, err := LoadSettings(lookupOf(values))
-	if err != nil || settings.DefaultChatID != "-100500" || settings.StatePath != "/tmp/x.json" || settings.LogLevel != "DEBUG" || settings.MaxMediaBytes != 45_000_000 {
+	if err != nil || settings.DefaultChatID != "-100500" || settings.DatabasePath != "/tmp/x.db" || settings.LogLevel != "DEBUG" || settings.MaxMediaBytes != 45_000_000 {
 		t.Fatalf("got %+v %v", settings, err)
+	}
+}
+
+func TestLegacyJSONStatePathIsIgnored(t *testing.T) {
+	values := baseSettings()
+	values["STATE_PATH"] = "./data/state.json"
+	settings, err := LoadSettings(lookupOf(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.DatabasePath != "./data/state.db" {
+		t.Fatalf("legacy JSON path should not override SQLite default: %q", settings.DatabasePath)
 	}
 }
 

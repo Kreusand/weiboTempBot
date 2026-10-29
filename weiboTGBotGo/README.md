@@ -1,6 +1,6 @@
 # Weibo to Telegram bot (Go)
 
-One static binary, standard library only, no CGO. State lives in one JSON file.
+SQLite state database (`data/state.db`) using a pure-Go driver; CGO is not required.
 
 ## Build
 
@@ -14,7 +14,7 @@ In Git Bash on Windows the second line works as written. Use `GOARCH=arm64` for 
 
 ## Configure and run
 
-Copy `.env.example` to `.env`, fill in the token, the admin ids and the Weibo cookie, then start `./weibo-tg-bot`
+Copy `.env.example` to `.env`, fill in the token, the admin ids and the Weibo cookie. When running the executable from `weiboTGBotGo` while reusing the repository-root Python database, set `DATABASE_PATH=../data/state.db` in the `.env` file read by the Go process. Paths are relative to the current working directory. Then start `./weibo-tg-bot`
 (`-env path` selects another file). Real environment variables win over `.env`.
 
 ## Deploy
@@ -30,7 +30,7 @@ sudo systemctl enable --now weibo-tg-bot
 journalctl -u weibo-tg-bot -f
 ```
 
-Back up `data/state.json` to keep the baselines. Only one process may poll a bot token: stop the Python bot first,
+Back up `data/state.db` to keep the baselines. Set `DATABASE_PATH` to the existing Python SQLite file. Only one process may poll a bot token: stop the Python bot first,
 otherwise Telegram answers with HTTP 409.
 
 ## Public and test
@@ -55,7 +55,7 @@ First steps in a private chat with the bot:
 
 ## Differences from the Python version
 
-- State is a JSON file (`STATE_PATH`), the old `state.db` is not read. Re-add accounts and destinations, `/add` builds the baseline.
+- State is stored in SQLite (`DATABASE_PATH`, default `./data/state.db`) and uses the Python database schema. Relative paths are resolved from the process working directory.
 - Line breaks of a post are kept, and no spaces are added around mentions.
 - New posts are sent oldest first, ordered by Weibo status id. An old post that is pinned later is recorded but not sent.
 - Messages to the administrators are English.

@@ -41,7 +41,7 @@ func run(envPath string) error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(settings.LogLevel)})))
 
-	store, err := OpenStore(settings.StatePath)
+	store, err := OpenStore(settings.DatabasePath)
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func run(envPath string) error {
 		"commentPollSeconds", int(settings.CommentsPollInterval.Seconds()),
 		"accounts", len(store.ListSources(false)),
 		"destinations", len(store.Destinations("")),
-		"statePath", settings.StatePath,
+		"databasePath", settings.DatabasePath,
 	)
 
 	var workers sync.WaitGroup

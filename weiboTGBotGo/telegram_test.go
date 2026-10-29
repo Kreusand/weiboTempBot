@@ -18,9 +18,11 @@ const testToken = "123456:SECRET-TOKEN"
 
 // recordedCall is one request the fake Telegram server received.
 type recordedCall struct {
-	method string
-	fields map[string]string
-	files  map[string][]byte
+	method     string
+	fields     map[string]string
+	jsonFields map[string]json.RawMessage
+	jsonBody   string
+	files      map[string][]byte
 }
 
 type fakeTelegram struct {
@@ -40,7 +42,7 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 			http.NotFound(w, r)
 			return
 		}
-		call := recordedCall{method: strings.TrimPrefix(r.URL.Path, "/bot"+testToken+"/"), fields: map[string]string{}, files: map[string][]byte{}}
+		call := recordedCall{method: strings.TrimPrefix(r.URL.Path, "/bot"+testToken+"/"), fields: map[string]string{}, jsonFields: map[string]json.RawMessage{}, files: map[string][]byte{}}
 		mediaType, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if strings.HasPrefix(mediaType, "multipart/") {
 			reader := multipart.NewReader(r.Body, params["boundary"])
@@ -57,11 +59,22 @@ func newFakeTelegram(t *testing.T) *fakeTelegram {
 				}
 			}
 		} else {
-			var raw map[string]any
-			json.NewDecoder(r.Body).Decode(&raw)
-			for key, value := range raw {
-				if text, ok := value.(string); ok {
-					call.fields[key] = text
+			body, _ := io.ReadAll(r.Body)
+			call.jsonBody = string(body)
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(body, &raw); err == nil {
+				call.jsonFields = raw
+				for key, rawValue := range raw {
+					var value any
+					if err := json.Unmarshal(rawValue, &value); err != nil {
+						continue
+					}
+					if text, ok := value.(string); ok {
+						call.fields[key] = text
+					} else {
+						encoded, _ := json.Marshal(value)
+						call.fields[key] = string(encoded)
+					}
 				}
 			}
 		}
@@ -113,6 +126,9 @@ func TestSendMessageAndDisablePreview(t *testing.T) {
 	call := fake.last()
 	if call.method != "sendMessage" || call.fields["chat_id"] != "-100" || call.fields["text"] != "hello" || call.fields["disable_web_page_preview"] != "true" {
 		t.Fatalf("unexpected call %+v", call)
+	}
+	if string(call.jsonFields["disable_web_page_preview"]) != "true" {
+		t.Errorf("disable_web_page_preview must be a JSON boolean, got %s", call.jsonFields["disable_web_page_preview"])
 	}
 }
 
@@ -223,8 +239,15 @@ func TestGetUpdatesAndGetMe(t *testing.T) {
 	if err != nil || len(updates) != 1 || updates[0].Message.Text != "/help" || updates[0].Message.From.ID != 42 || updates[0].Message.Chat.ID != -100 {
 		t.Fatalf("got %+v %v", updates, err)
 	}
-	if call := fake.last(); call.fields["offset"] != "5" {
+	call := fake.last()
+	if call.fields["offset"] != "5" {
 		t.Errorf("offset not sent: %+v", call.fields)
+	}
+	if string(call.jsonFields["offset"]) != "5" || string(call.jsonFields["timeout"]) != "1" || string(call.jsonFields["allowed_updates"]) != `["message"]` {
+		t.Errorf("getUpdates parameters have incorrect JSON types: %s", call.jsonBody)
+	}
+	if len(fake.calls) == 0 || strings.TrimSpace(fake.calls[0].jsonBody) != "{}" {
+		t.Errorf("parameterless getMe must send an empty JSON object, got %q", fake.calls[0].jsonBody)
 	}
 }
 

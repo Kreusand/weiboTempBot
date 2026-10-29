@@ -25,7 +25,7 @@ type Settings struct {
 	CommentsWatchPosts    int
 	CommentsTopLevelLimit int
 	ReplyThreadsPerPoll   int
-	StatePath             string
+	DatabasePath          string
 	LogLevel              string
 }
 
@@ -130,9 +130,15 @@ func LoadSettings(lookup lookupFunc) (*Settings, error) {
 	settings := &Settings{TelegramToken: token, AdminIDs: admins, WeiboCookies: cookies}
 	settings.DefaultChatID, _ = lookup("TELEGRAM_CHAT_ID")
 	settings.DefaultChatID = strings.TrimSpace(settings.DefaultChatID)
-	settings.StatePath = "./data/state.json"
-	if value, ok := lookup("STATE_PATH"); ok && strings.TrimSpace(value) != "" {
-		settings.StatePath = strings.TrimSpace(value)
+	settings.DatabasePath = "./data/state.db"
+	if value, ok := lookup("DATABASE_PATH"); ok && strings.TrimSpace(value) != "" {
+		settings.DatabasePath = strings.TrimSpace(value)
+	} else if value, ok := lookup("STATE_PATH"); ok && strings.TrimSpace(value) != "" {
+		// Ignore the old JSON filename; the SQLite store must use a database path.
+		legacyPath := strings.TrimSpace(value)
+		if !strings.HasSuffix(strings.ToLower(legacyPath), ".json") {
+			settings.DatabasePath = legacyPath
+		}
 	}
 	settings.LogLevel = "INFO"
 	if value, ok := lookup("LOG_LEVEL"); ok && strings.TrimSpace(value) != "" {

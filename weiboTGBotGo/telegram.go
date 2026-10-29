@@ -110,9 +110,21 @@ func (c *TelegramClient) redact(err error) error {
 	return err
 }
 
+func formValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []string:
+		encoded, _ := json.Marshal(v)
+		return string(encoded)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
 // call sends one request. Files switch the body to multipart. A 429 answer is retried after the
 // wait Telegram asks for.
-func (c *TelegramClient) call(ctx context.Context, method string, fields map[string]string, files map[string]uploadFile, timeout time.Duration) (json.RawMessage, error) {
+func (c *TelegramClient) call(ctx context.Context, method string, fields map[string]any, files map[string]uploadFile, timeout time.Duration) (json.RawMessage, error) {
 	for attempt := 0; ; attempt++ {
 		result, err := c.callOnce(ctx, method, fields, files, timeout)
 		var apiErr *TelegramError
@@ -129,7 +141,7 @@ func (c *TelegramClient) call(ctx context.Context, method string, fields map[str
 	}
 }
 
-func (c *TelegramClient) callOnce(ctx context.Context, method string, fields map[string]string, files map[string]uploadFile, timeout time.Duration) (json.RawMessage, error) {
+func (c *TelegramClient) callOnce(ctx context.Context, method string, fields map[string]any, files map[string]uploadFile, timeout time.Duration) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -137,13 +149,16 @@ func (c *TelegramClient) callOnce(ctx context.Context, method string, fields map
 	contentType := ""
 	if len(files) == 0 {
 		contentType = "application/json"
+		if fields == nil {
+			fields = map[string]any{}
+		}
 		if err := json.NewEncoder(&body).Encode(fields); err != nil {
 			return nil, err
 		}
 	} else {
 		writer := multipart.NewWriter(&body)
 		for name, value := range fields {
-			if err := writer.WriteField(name, value); err != nil {
+			if err := writer.WriteField(name, formValue(value)); err != nil {
 				return nil, err
 			}
 		}
@@ -209,10 +224,10 @@ func (c *TelegramClient) GetMe(ctx context.Context) (TelegramUser, error) {
 
 // GetUpdates long-polls for new messages.
 func (c *TelegramClient) GetUpdates(ctx context.Context, offset int64, pollSeconds int) ([]TelegramUpdate, error) {
-	raw, err := c.call(ctx, "getUpdates", map[string]string{
-		"offset":          strconv.FormatInt(offset, 10),
-		"timeout":         strconv.Itoa(pollSeconds),
-		"allowed_updates": `["message"]`,
+	raw, err := c.call(ctx, "getUpdates", map[string]any{
+		"offset":          offset,
+		"timeout":         pollSeconds,
+		"allowed_updates": []string{"message"},
 	}, nil, time.Duration(pollSeconds+20)*time.Second)
 	if err != nil {
 		return nil, err
@@ -222,16 +237,16 @@ func (c *TelegramClient) GetUpdates(ctx context.Context, offset int64, pollSecon
 }
 
 func (c *TelegramClient) SendMessage(ctx context.Context, chatID, text string, disablePreview bool) error {
-	fields := map[string]string{"chat_id": chatID, "text": text}
+	fields := map[string]any{"chat_id": chatID, "text": text}
 	if disablePreview {
-		fields["disable_web_page_preview"] = "true"
+		fields["disable_web_page_preview"] = true
 	}
 	_, err := c.call(ctx, "sendMessage", fields, nil, textTimeout)
 	return err
 }
 
 func (c *TelegramClient) GetChat(ctx context.Context, chatID string) (TelegramChat, error) {
-	raw, err := c.call(ctx, "getChat", map[string]string{"chat_id": chatID}, nil, textTimeout)
+	raw, err := c.call(ctx, "getChat", map[string]any{"chat_id": chatID}, nil, textTimeout)
 	if err != nil {
 		return TelegramChat{}, err
 	}
@@ -242,10 +257,10 @@ func (c *TelegramClient) GetChat(ctx context.Context, chatID string) (TelegramCh
 // SendSingle uploads one photo or video.
 func (c *TelegramClient) SendSingle(ctx context.Context, chatID, kind, caption string, file uploadFile) error {
 	method, field := "sendPhoto", "photo"
-	fields := map[string]string{"chat_id": chatID}
+	fields := map[string]any{"chat_id": chatID}
 	if kind == mediaVideo {
 		method, field = "sendVideo", "video"
-		fields["supports_streaming"] = "true"
+		fields["supports_streaming"] = true
 	}
 	if caption != "" {
 		fields["caption"] = caption
@@ -273,6 +288,6 @@ func (c *TelegramClient) SendAlbum(ctx context.Context, chatID string, members [
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, "sendMediaGroup", map[string]string{"chat_id": chatID, "media": string(encoded)}, files, uploadTimeout)
+	_, err = c.call(ctx, "sendMediaGroup", map[string]any{"chat_id": chatID, "media": string(encoded)}, files, uploadTimeout)
 	return err
 }
